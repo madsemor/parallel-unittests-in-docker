@@ -15,6 +15,12 @@
     <maven.compiler.target>1.8</maven.compiler.target>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <junit.jupiter.version>5.10.2</junit.jupiter.version>
+    <!-- Tests are skipped by default (see maven-surefire-plugin below) so
+         that `mvn test`/`mvn package` on the HOST never run JUnit directly;
+         they're run inside Docker instead (via exec-maven-plugin). Docker
+         itself overrides this back to false with -Dskip.local.tests=false
+         when it actually wants to execute the tests. -->
+    <skip.local.tests>true</skip.local.tests>
   </properties>
 
   <dependencies>
@@ -51,14 +57,14 @@
            Local execution is disabled: tests are run inside Docker instead
            (see the exec-maven-plugin execution below), so `mvn test` /
            `mvn package` never run JUnit directly on the host JVM. -->
-      <!--plugin>
+      <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.2.5</version>
         <configuration>
-          <skipTests>true</skipTests>
+          <skipTests>${skip.local.tests}</skipTests>
         </configuration>
-      </plugin-->
+      </plugin>
 
       <!-- Runs run-tests.sh during the "test" phase, which builds a Docker
            image and runs each JUnit 5 test class inside its own fresh,

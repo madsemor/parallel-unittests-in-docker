@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 #
-# Builds the Docker image once, then runs each JUnit 5 test class in its
-# own brand-new, ephemeral container (docker run --rm), IN PARALLEL. Each
-# invocation of `docker run` starts a fresh container from the built image,
-# so every test class still gets a fully reset container (clean filesystem,
-# clean JVM, no state left over from any other test) — they just all run
-# at the same time instead of one after another.
+# Builds the Docker image once (which also pre-compiles the app + tests and
+# warms the Maven plugin cache — see Dockerfile), then runs each JUnit 5
+# test class in its own brand-new, ephemeral container (docker run --rm),
+# IN PARALLEL. Each container calls the surefire:test goal directly against
+# the classes already baked into the image, so no container ever runs
+# `mvn compile` itself. Each invocation of `docker run` still starts a
+# fresh container from the built image, so every test class gets a fully
+# reset container (clean filesystem, clean JVM, no state left over from
+# any other test) — they just all run at the same time instead of one
+# after another.
 #
 set -uo pipefail
 
@@ -41,7 +45,14 @@ echo "==> Launching one fresh, isolated container per test class, in parallel...
 for CLASS in ${TEST_CLASSES}; do
   echo "==> Starting container for: ${CLASS}"
   (
-    docker run --rm "${IMAGE_NAME}" mvn -q -B test -Dtest="${CLASS}" \
+    # `surefire:test` is called directly (a single plugin goal), NOT the
+    # "test" lifecycle phase. That means it does not trigger compile /
+    # test-compile — it just runs the class files that were already built
+    # into the image at `docker build` time (see Dockerfile). -o keeps it
+    # offline since the image already has everything cached.
+    docker run --rm "${IMAGE_NAME}" \
+      mvn -q -B -o surefire:test -Dtest="${CLASS}" \
+      -Dskip.local.tests=false -Dexec.skip=true \
       > "${LOG_DIR}/${CLASS}.log" 2>&1
     echo $? > "${LOG_DIR}/${CLASS}.exit"
   ) &
