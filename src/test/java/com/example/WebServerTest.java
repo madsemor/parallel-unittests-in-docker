@@ -3,6 +3,8 @@ package com.example;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -44,11 +46,16 @@ class WebServerTest {
         assertEquals("Hello, World!", response.body);
     }
 
-    @Test
-    void addEndpointReturnsSum() throws IOException {
-        HttpResponse response = get("/add?a=2&b=3");
+    @ParameterizedTest(name = "GET /add?a={0}&b={1} -> {2}")
+    @CsvSource({
+            "2, 3, 5",
+            "10, 7, 17",
+            "-1, 4, 3"
+    })
+    void addEndpointReturnsSum(int a, int b, int expected) throws IOException {
+        HttpResponse response = get("/add?a=" + a + "&b=" + b);
         assertEquals(200, response.statusCode);
-        assertEquals("5", response.body);
+        assertEquals(String.valueOf(expected), response.body);
     }
 
     private HttpResponse get(String path) throws IOException {
