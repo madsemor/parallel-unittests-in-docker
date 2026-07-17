@@ -36,10 +36,14 @@ calling any method directly. `@AfterAll` stops the server afterward.
 ## Running tests via Maven (`mvn package`)
 
 Local JUnit execution is disabled in `pom.xml` (`maven-surefire-plugin` has
-`skipTests=true`). Instead, `exec-maven-plugin` is bound to Maven's `test`
-phase and invokes `run-tests.sh`, which builds the Docker image and runs the
-tests inside containers. Since `package` depends on `test`, this happens
-automatically:
+`skipTests=true`). Instead, Maven invokes the appropriate runner for the
+current OS during the `test` phase:
+
+- `run-tests.sh` on Linux and macOS
+- `run-tests.ps1` on Windows
+
+That runner builds the Docker image and runs the tests inside containers.
+Since `package` depends on `test`, this happens automatically:
 
 ```bash
 mvn package
@@ -77,9 +81,18 @@ and `--rm` deletes it as soon as it finishes. That means:
 
 Requires Docker installed locally.
 
+On Linux or macOS:
+
 ```bash
 cd simple-app
 ./run-tests.sh
+```
+
+On Windows PowerShell:
+
+```powershell
+cd simple-app
+./run-tests.ps1
 ```
 
 Example output:

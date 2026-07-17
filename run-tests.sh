@@ -28,24 +28,25 @@ echo "==> Discovering test classes..."
 # fully-qualified class name, e.g. com.example.WebServerTest.
 # Using an array keeps each discovered class name as a separate entry so we
 # can start every test class in its own background job.
-mapfile -t TEST_CLASSES < <(find src/test/java -name "*Test.java" | \
-  sed -e 's#^src/test/java/##' -e 's#\.java$##' -e 's#/#.#g')
+TEST_CLASSES=()
+while IFS= read -r TEST_FILE; do
+  TEST_CLASSES+=("$(printf '%s\n' "${TEST_FILE}" | \
+    sed -e 's#^src/test/java/##' -e 's#\.java$##' -e 's#/#.#g')")
+done < <(find src/test/java -name "*Test.java")
 
 if [ ${#TEST_CLASSES[@]} -eq 0 ]; then
   echo "No test classes found."
   exit 1
 fi
 
-LOG_DIR="$(mktemp -d)"
+LOG_DIR="$(mktemp -d "${PWD}/.tmp-test-logs.XXXXXX")"
 trap 'rm -rf "${LOG_DIR}"' EXIT
 
-declare -A PIDS
-declare -a RUN_TARGETS=()
-MAX_PARALLEL=4
-ACTIVE=0
+RUN_TARGETS=()
+PIDS=()
 
 echo ""
-echo "==> Launching up to ${MAX_PARALLEL} fresh, isolated containers at a time..."
+echo "==> Launching fresh, isolated containers in parallel..."
 
 for CLASS in "${TEST_CLASSES[@]}"; do
   TARGETS=("${CLASS}")
@@ -76,22 +77,13 @@ for CLASS in "${TEST_CLASSES[@]}"; do
         > "${LOG_DIR}/${TARGET}.log" 2>&1
       echo $? > "${LOG_DIR}/${TARGET}.exit"
     ) &
-    PIDS["${TARGET}"]=$!
-    ACTIVE=$((ACTIVE + 1))
-
-    if [ "${ACTIVE}" -ge "${MAX_PARALLEL}" ]; then
-      TARGET_TO_WAIT="${TARGET}"
-      wait "${PIDS[${TARGET_TO_WAIT}]}"
-      ACTIVE=$((ACTIVE - 1))
-    fi
+    PIDS+=("$!")
   done
 done
 
-# Wait for any remaining containers to finish before reporting results.
-for TARGET in "${RUN_TARGETS[@]}"; do
-  if wait "${PIDS[${TARGET}]}" 2>/dev/null; then
-    :
-  fi
+# Wait for all spawned containers to finish before reporting results.
+for PID in "${PIDS[@]}"; do
+  wait "${PID}" 2>/dev/null || true
 done
 
 FAILED=0
