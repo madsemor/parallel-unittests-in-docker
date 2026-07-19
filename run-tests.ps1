@@ -31,66 +31,26 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "==> Discovering test targets..."
 $TEST_TARGETS = @()
 
-if (Test-Path "src\test\java") {
-    Get-ChildItem -Path "src\test\java" -Filter "*Test.java" -Recurse | ForEach-Object {
-        $relativePath = $_.FullName -replace [regex]::Escape((Get-Item "src\test\java").FullName), ""
-        $relativePath = $relativePath -replace "^[\\/]", ""
-        $className = $relativePath -replace "\.java$", "" -replace "\\", "."
-        $className = $className -replace "/", "."
+# Use Python script to discover test targets (filtered to WebServerTest only)
+$pythonCmd = $null
+if (Get-Command python3 -ErrorAction SilentlyContinue) {
+    $pythonCmd = "python3"
+} elseif (Get-Command python -ErrorAction SilentlyContinue) {
+    $pythonCmd = "python"
+} else {
+    Write-Host "Python is required to discover parameterized test targets."
+    exit 1
+}
 
-        $lines = Get-Content -Path $_.FullName
-        for ($index = 0; $index -lt $lines.Count; $index++) {
-            if ($lines[$index] -match '^\s*(?:public|protected|private)?\s*(?:static\s+)?(?:final\s+)?(?:[\w<>\[\],?]+\s+)+(\w+)\s*\(') {
-                $methodName = $matches[1]
+$discoveryOutput = & $pythonCmd "$scriptRoot\discover_test_targets.py" "$scriptRoot" --filter-class WebServerTest
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Test discovery failed"
+    exit 1
+}
 
-                $annotations = @()
-                $cursor = $index - 1
-                while ($cursor -ge 0) {
-                    $trimmed = $lines[$cursor].Trim()
-                    if ([string]::IsNullOrWhiteSpace($trimmed)) {
-                        break
-                    }
-                    if ($trimmed.StartsWith("//") -or $trimmed.StartsWith("/*") -or $trimmed.StartsWith("*") -or $trimmed.StartsWith("*/")) {
-                        $cursor--
-                        continue
-                    }
-                    if ($trimmed.StartsWith("@") -or $trimmed.StartsWith("{") -or $trimmed.StartsWith("}") -or $trimmed.StartsWith(")") -or $trimmed.StartsWith(",") -or $trimmed.StartsWith('"')) {
-                        $annotations += $trimmed
-                        $cursor--
-                        continue
-                    }
-                    break
-                }
-
-                $annotationLines = @($annotations | Select-Object -Last ($annotations.Count))
-                if ($annotations.Count -gt 0) {
-                    $annotationLines = @($annotations | Select-Object -Reverse)
-                }
-                $annotationText = $annotationLines -join "`n"
-
-                if ($annotationText -notmatch '@Test' -and $annotationText -notmatch '@ParameterizedTest') {
-                    continue
-                }
-
-                if ($annotationText -match '@ParameterizedTest' -and $annotationText -match '@CsvSource') {
-                    $sourceBlock = $annotationText.Split('@CsvSource', 2)[1]
-                    $invocationCount = @([regex]::Matches($sourceBlock, '"[^"]*"') | ForEach-Object { $_.Value } | Select-Object -Unique).Count
-                } elseif ($annotationText -match '@ParameterizedTest' -and $annotationText -match '@ValueSource') {
-                    $sourceBlock = $annotationText.Split('@ValueSource', 2)[1]
-                    $invocationCount = @([regex]::Matches($sourceBlock, '"[^"]*"') | ForEach-Object { $_.Value } | Select-Object -Unique).Count
-                } else {
-                    $invocationCount = 1
-                }
-
-                for ($invocation = 1; $invocation -le $invocationCount; $invocation++) {
-                    if ($invocationCount -gt 1) {
-                        $TEST_TARGETS += "$className#$methodName[$invocation]"
-                    } else {
-                        $TEST_TARGETS += "$className#$methodName"
-                    }
-                }
-            }
-        }
+foreach ($target in $discoveryOutput) {
+    if (-not [string]::IsNullOrWhiteSpace($target)) {
+        $TEST_TARGETS += $target
     }
 }
 
@@ -103,9 +63,10 @@ $LOG_DIR = Join-Path ([System.IO.Path]::GetTempPath()) ("simple-app-tests-" + [S
 New-Item -ItemType Directory -Path $LOG_DIR -Force | Out-Null
 $jobs = @{}
 $RUN_TARGETS = @()
+$MAX_CONCURRENT = 4
 
 Write-Host ""
-Write-Host "==> Launching fresh, isolated containers in parallel..."
+Write-Host "==> Launching fresh, isolated containers with a concurrency limit of ${MAX_CONCURRENT}..."
 
 foreach ($TARGET in $TEST_TARGETS) {
     $RUN_TARGETS += $TARGET
@@ -132,6 +93,30 @@ foreach ($TARGET in $TEST_TARGETS) {
     } -ArgumentList $IMAGE_NAME, $TARGET, $LOG_DIR
 
     $jobs[$TARGET] = $job
+
+    # Enforce concurrency limit
+    if ($jobs.Count -ge $MAX_CONCURRENT) {
+        $firstTarget = $RUN_TARGETS | Select-Object -First 1 | Where-Object { $jobs.ContainsKey($_) } -First 1
+        $completedCount = 0
+        foreach ($t in $RUN_TARGETS) {
+            if ($jobs.ContainsKey($t)) {
+                $job = $jobs[$t]
+                if ($job.State -eq "Completed") {
+                    $completedCount++
+                }
+            }
+        }
+        
+        while ($jobs.Count -ge $MAX_CONCURRENT) {
+            $key = $jobs.Keys | Select-Object -First 1
+            if ($jobs.ContainsKey($key)) {
+                Wait-Job -Job $jobs[$key] -Timeout 1 | Out-Null
+                if ($jobs[$key].State -eq "Completed") {
+                    break
+                }
+            }
+        }
+    }
 }
 
 Write-Host "==> Waiting for all containers to finish..."
