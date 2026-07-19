@@ -30,8 +30,9 @@ def _count_csv_source_invocations(annotation_text):
     if "{" in source_block and "}" in source_block:
         source_block = source_block.split("{", 1)[1].split("}", 1)[0]
 
-    values = re.findall(r'"[^"]*"', source_block)
-    return len(values) if values else 1
+    # Count rows by counting lines that contain quoted strings (each line is one test case)
+    lines = [line.strip() for line in source_block.split('\n') if line.strip() and '"' in line]
+    return len(lines) if lines else 1
 
 
 def _count_value_source_invocations(annotation_text):
@@ -86,11 +87,10 @@ def discover_test_targets(path, test_root=None):
             invocation_count = 1
 
         full_name = f"{class_name}#{method_name}"
-        for invocation in range(1, invocation_count + 1):
-            if invocation_count > 1:
-                targets.append(f"{full_name}[{invocation}]")
-            else:
-                targets.append(full_name)
+        # For Maven surefire:test goal, we need to return method names without [n] suffix
+        # surefire will run all parameterized invocations when given the method name
+        if invocation_count > 0:
+            targets.append(full_name)
 
     return targets
 

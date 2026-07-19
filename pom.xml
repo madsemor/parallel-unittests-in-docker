@@ -104,6 +104,7 @@
                     <argument>-File</argument>
                     <argument>${project.basedir}/run-tests.ps1</argument>
                   </arguments>
+                  <failOnError>true</failOnError>
                 </configuration>
               </execution>
             </executions>
@@ -137,6 +138,7 @@
                   <arguments>
                     <argument>${project.basedir}/run-tests.sh</argument>
                   </arguments>
+                  <failOnError>true</failOnError>
                 </configuration>
               </execution>
             </executions>
