@@ -28,22 +28,74 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-Write-Host "==> Discovering test classes..."
-# Find all *Test.java files under src/test/java and turn the path into a
-# fully-qualified class name, e.g. com.example.WebServerTest.
-$TEST_CLASSES = @()
+Write-Host "==> Discovering test targets..."
+$TEST_TARGETS = @()
+
 if (Test-Path "src\test\java") {
     Get-ChildItem -Path "src\test\java" -Filter "*Test.java" -Recurse | ForEach-Object {
         $relativePath = $_.FullName -replace [regex]::Escape((Get-Item "src\test\java").FullName), ""
         $relativePath = $relativePath -replace "^[\\/]", ""
         $className = $relativePath -replace "\.java$", "" -replace "\\", "."
         $className = $className -replace "/", "."
-        $TEST_CLASSES += $className
+
+        $lines = Get-Content -Path $_.FullName
+        for ($index = 0; $index -lt $lines.Count; $index++) {
+            if ($lines[$index] -match '^\s*(?:public|protected|private)?\s*(?:static\s+)?(?:final\s+)?(?:[\w<>\[\],?]+\s+)+(\w+)\s*\(') {
+                $methodName = $matches[1]
+
+                $annotations = @()
+                $cursor = $index - 1
+                while ($cursor -ge 0) {
+                    $trimmed = $lines[$cursor].Trim()
+                    if ([string]::IsNullOrWhiteSpace($trimmed)) {
+                        break
+                    }
+                    if ($trimmed.StartsWith("//") -or $trimmed.StartsWith("/*") -or $trimmed.StartsWith("*") -or $trimmed.StartsWith("*/")) {
+                        $cursor--
+                        continue
+                    }
+                    if ($trimmed.StartsWith("@") -or $trimmed.StartsWith("{") -or $trimmed.StartsWith("}") -or $trimmed.StartsWith(")") -or $trimmed.StartsWith(",") -or $trimmed.StartsWith('"')) {
+                        $annotations += $trimmed
+                        $cursor--
+                        continue
+                    }
+                    break
+                }
+
+                $annotationLines = @($annotations | Select-Object -Last ($annotations.Count))
+                if ($annotations.Count -gt 0) {
+                    $annotationLines = @($annotations | Select-Object -Reverse)
+                }
+                $annotationText = $annotationLines -join "`n"
+
+                if ($annotationText -notmatch '@Test' -and $annotationText -notmatch '@ParameterizedTest') {
+                    continue
+                }
+
+                if ($annotationText -match '@ParameterizedTest' -and $annotationText -match '@CsvSource') {
+                    $sourceBlock = $annotationText.Split('@CsvSource', 2)[1]
+                    $invocationCount = @([regex]::Matches($sourceBlock, '"[^"]*"') | ForEach-Object { $_.Value } | Select-Object -Unique).Count
+                } elseif ($annotationText -match '@ParameterizedTest' -and $annotationText -match '@ValueSource') {
+                    $sourceBlock = $annotationText.Split('@ValueSource', 2)[1]
+                    $invocationCount = @([regex]::Matches($sourceBlock, '"[^"]*"') | ForEach-Object { $_.Value } | Select-Object -Unique).Count
+                } else {
+                    $invocationCount = 1
+                }
+
+                for ($invocation = 1; $invocation -le $invocationCount; $invocation++) {
+                    if ($invocationCount -gt 1) {
+                        $TEST_TARGETS += "$className#$methodName[$invocation]"
+                    } else {
+                        $TEST_TARGETS += "$className#$methodName"
+                    }
+                }
+            }
+        }
     }
 }
 
-if ($TEST_CLASSES.Count -eq 0) {
-    Write-Host "No test classes found."
+if ($TEST_TARGETS.Count -eq 0) {
+    Write-Host "No test targets found."
     exit 1
 }
 
@@ -55,46 +107,31 @@ $RUN_TARGETS = @()
 Write-Host ""
 Write-Host "==> Launching fresh, isolated containers in parallel..."
 
-foreach ($CLASS in $TEST_CLASSES) {
-    $TARGETS = @($CLASS)
+foreach ($TARGET in $TEST_TARGETS) {
+    $RUN_TARGETS += $TARGET
+    Write-Host "==> Starting container for: ${TARGET}"
 
-    # For WebServerTest, run each parameterized case as its own isolated
-    # container so the cases execute independently.
-    if ($CLASS -eq "com.example.WebServerTest") {
-        $TARGETS = @(
-            "com.example.WebServerTest#helloEndpointReturnsGreeting",
-            "com.example.WebServerTest#addEndpointReturnsSum[1]",
-            "com.example.WebServerTest#addEndpointReturnsSum[2]",
-            "com.example.WebServerTest#addEndpointReturnsSum[3]"
-        )
-    }
+    $job = Start-Job -ScriptBlock {
+        param($ImageName, $TargetName, $LogDir)
 
-    foreach ($TARGET in $TARGETS) {
-        $RUN_TARGETS += $TARGET
-        Write-Host "==> Starting container for: ${TARGET}"
+        $logFile = Join-Path $LogDir ("{0}.log" -f $TargetName)
+        $exitFile = Join-Path $LogDir ("{0}.exit" -f $TargetName)
 
-        $job = Start-Job -ScriptBlock {
-            param($ImageName, $TargetName, $LogDir)
+        try {
+            docker run --rm $ImageName `
+                mvn -q -B -o surefire:test -Dtest="$TargetName" `
+                -Dskip.local.tests=false -Dexec.skip=true `
+                *> $logFile
 
-            $logFile = Join-Path $LogDir ("{0}.log" -f $TargetName)
-            $exitFile = Join-Path $LogDir ("{0}.exit" -f $TargetName)
+            $exitCode = $LASTEXITCODE
+        } catch {
+            $exitCode = 1
+        }
 
-            try {
-                docker run --rm $ImageName `
-                    mvn -q -B -o surefire:test -Dtest="$TargetName" `
-                    -Dskip.local.tests=false -Dexec.skip=true `
-                    *> $logFile
+        Set-Content -Path $exitFile -Value $exitCode
+    } -ArgumentList $IMAGE_NAME, $TARGET, $LOG_DIR
 
-                $exitCode = $LASTEXITCODE
-            } catch {
-                $exitCode = 1
-            }
-
-            Set-Content -Path $exitFile -Value $exitCode
-        } -ArgumentList $IMAGE_NAME, $TARGET, $LOG_DIR
-
-        $jobs[$TARGET] = $job
-    }
+    $jobs[$TARGET] = $job
 }
 
 Write-Host "==> Waiting for all containers to finish..."

@@ -29,9 +29,9 @@ class WebServerTest {
     static void startServer() throws IOException {
         // port 0 -> OS assigns a free port, so tests never clash with
         // anything else already listening.
-        server = new WebServer(7000);
+        server = new WebServer(7001);
         server.start();
-        port = 7000;//server.getPort();
+        port = 7001;//server.getPort();
     }
 
     @AfterAll
@@ -50,6 +50,8 @@ class WebServerTest {
     @CsvSource({
             "2, 3, 5",
             "10, 7, 17",
+            "10, 7, 17",
+            "-1, 4, 3",
             "-1, 4, 3"
     })
     void addEndpointReturnsSum(int a, int b, int expected) throws IOException {

@@ -15,12 +15,10 @@
     <maven.compiler.target>1.8</maven.compiler.target>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <junit.jupiter.version>5.10.2</junit.jupiter.version>
-    <!-- Tests are skipped by default (see maven-surefire-plugin below) so
-         that `mvn test`/`mvn package` on the HOST never run JUnit directly;
-         they're run inside Docker instead (via exec-maven-plugin). Docker
-         itself overrides this back to false with -Dskip.local.tests=false
-         when it actually wants to execute the tests. -->
-    <skip.local.tests>true</skip.local.tests>
+    <!-- CalculatorTest runs locally by default, while WebServerTest is
+         excluded from local execution (it runs in Docker via exec-maven-plugin).
+         Docker's script only runs WebServerTest targets. -->
+    <skip.local.tests>false</skip.local.tests>
   </properties>
 
   <dependencies>
@@ -60,16 +58,17 @@
       </plugin>
 
       <!-- Surefire with JUnit 5 platform support.
-           Local execution is disabled: tests are run inside Docker instead
-           (see the exec-maven-plugin configuration in the OS-specific
-           profiles below), so `mvn test` / `mvn package` never run JUnit
-           directly on the host JVM. -->
+           Runs CalculatorTest locally, excludes WebServerTest (which runs
+           only in Docker via exec-maven-plugin). -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.2.5</version>
         <configuration>
           <skipTests>${skip.local.tests}</skipTests>
+          <excludes>
+            <exclude>**/WebServerTest.java</exclude>
+          </excludes>
         </configuration>
       </plugin>
     </plugins>
